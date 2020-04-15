@@ -253,10 +253,11 @@ prepare_data <- function(full = F){
   #wjd_all <- wjd_all %>% group_by(N, performer, value) %>%   mutate(freq_p = n()) %>% ungroup() %>% group_by(N, performer) %>% mutate(total = sum(freq_p), prob_p = freq_p/total, surprise_p = -log2(prob_p))  %>% ungroup() %>% select(-total)
   saveRDS(wjd_all, "data/wjd_all.RDS")  
 }
-download_data_osf <- function(){
+download_data_osf <- function(force = F){
   data_files<- c("wjd_all.RDS", 
                  "wjd_all_int.RDS",
                  "wjd_simul.RDS",
+                 "wjd_transforms",
                  "phrase_pos.RDS",
                  "phrase_selection.RDS",
                  "simul_pattern_features.RDS",
@@ -265,7 +266,7 @@ download_data_osf <- function(){
   data_dir <- "data"
   ef_project <- osf_retrieve_node("svm2z") %>% osf_ls_files()
   map_dfr(data_files, function(x){
-    if(!file.exists(file.path(data_dir, x))){
+    if(force || !file.exists(file.path(data_dir, x))){
       messagef("Downloading %s", x)
       ef_project %>% osf_ls_files(pattern = x) %>% osf_download(path = data_dir)
     }
