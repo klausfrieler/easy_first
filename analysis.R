@@ -1,5 +1,6 @@
 library(tidyverse)
 library(ggrepel)
+library(osfr)
 
 messagef <- function(...) message(sprintf(...))
 printf <- function(...) print(sprintf(...))
@@ -253,16 +254,16 @@ prepare_data <- function(full = F){
   #wjd_all <- wjd_all %>% group_by(N, performer, value) %>%   mutate(freq_p = n()) %>% ungroup() %>% group_by(N, performer) %>% mutate(total = sum(freq_p), prob_p = freq_p/total, surprise_p = -log2(prob_p))  %>% ungroup() %>% select(-total)
   saveRDS(wjd_all, "data/wjd_all.RDS")  
 }
+
 download_data_osf <- function(force = F){
   data_files<- c("wjd_all.RDS", 
                  "wjd_all_int.RDS",
                  "wjd_simul.RDS",
-                 "wjd_transforms",
+                 "wjd_transforms.RDS",
                  "phrase_pos.RDS",
                  "phrase_selection.RDS",
                  "simul_pattern_features.RDS",
                  "wjd_metadata.csv")
-  require(osfr)
   data_dir <- "data"
   ef_project <- osf_retrieve_node("svm2z") %>% osf_ls_files()
   map_dfr(data_files, function(x){
