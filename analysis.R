@@ -226,9 +226,13 @@ prepare_simul_data <-function(){
     mutate(in_phrase = (rev_phrase_pos - N) > 0 ) 
   
   saveRDS(wjd_simul, "data/wjd_simul.RDS")
+  saveRDS(wjd_simul %>% make_inphrase_mla_data(), "data/wjd_inphrase_simul.RDS")
   wjd_simul  
 }
 
+make_inphrase_mla_data <- function(data){
+  data %>% filter_in_phrase_ngrams() %>% add_mla_annotations(wjd_all) %>% filter(melid != 194)
+}
 prepare_data <- function(full = F){
   wjd_transforms <-  readRDS("data/wjd_transforms.RDS") %>% 
     mutate(id = as.character(id))
@@ -253,7 +257,10 @@ prepare_data <- function(full = F){
   #wjd_all <- wjd_all %>% group_by(N, value) %>%   mutate(freq = n()) %>% ungroup() %>% group_by(N) %>% mutate(total = sum(freq), prob = freq/total, surprise = -log2(prob))  %>% ungroup() %>% select(-total)
   #wjd_all <- wjd_all %>% group_by(N, id, value) %>%   mutate(freq_s = n()) %>% ungroup() %>% group_by(N, id) %>% mutate(total = sum(freq_s), prob_s = freq_s/total, surprise_s = -log2(prob_s))  %>% ungroup() %>% select(-total)
   #wjd_all <- wjd_all %>% group_by(N, performer, value) %>%   mutate(freq_p = n()) %>% ungroup() %>% group_by(N, performer) %>% mutate(total = sum(freq_p), prob_p = freq_p/total, surprise_p = -log2(prob_p))  %>% ungroup() %>% select(-total)
+  
   saveRDS(wjd_all, "data/wjd_all.RDS")  
+  saveRDS(wjd_all %>% make_inphrase_mla_data(), "data/wjd_inphrase.RDS")
+  wjd_all
 }
 
 download_data_osf <- function(force = F){
@@ -264,7 +271,8 @@ download_data_osf <- function(force = F){
                  "phrase_pos.RDS",
                  "phrase_selection.RDS",
                  "simul_pattern_features.RDS",
-                 "wjd_metadata.csv")
+                 "wjd_metadata.csv",
+                 "inphrase_data.rda")
   data_dir <- "data"
   ef_project <- osf_retrieve_node("svm2z") %>% osf_ls_files()
   map_dfr(data_files, function(x){
@@ -286,6 +294,8 @@ setup_workspace <-function(recalc = F, full = F, simul = F){
     assign("wjd_all", readRDS("data/wjd_all.RDS"), globalenv())
     
   }
+
+  load("data/inphrase_data.rda", globalenv())
   assign("phrase_pos", readRDS("data/phrase_pos.RDS"), globalenv())
   assign("wjd_transforms", readRDS("data/wjd_transforms.RDS"), globalenv())
   assign("all_performers",  unique(wjd_all$performer), globalenv())
@@ -350,7 +360,7 @@ calc_overall_complexity <- function(data = wjd_all, measures = easiness_measures
 
 filter_in_phrase_ngrams <- function(data){
   data <- data %>% mutate(in_phrase = (rev_phrase_pos - N) > 0)
-  data <- data %>% filter(in_phrase, !(sub_type %in% c("trill", "repetition"))) %>% group_by(N) %>% mutate(total_freq = n()) %>% ungroup() 
+  data <- data %>% filter(in_phrase) %>% group_by(N) %>% mutate(total_freq = n()) %>% ungroup() 
   
   data <- data %>% group_by(value) %>% mutate(freq = n(), surprise = -log2(freq/total_freq)) %>% ungroup()
   data <- data %>% group_by(N) %>% mutate(z_surprise = scale(surprise)) %>% ungroup()
