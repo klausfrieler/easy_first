@@ -94,8 +94,8 @@ get_default_theme <- function(x_rotate = 0, keep_legend = F, default_text_size =
   if(!keep_legend){
     t <- t + theme(legend.position = "none")
   }
-  t <- t + theme(legend.key.size=unit(0.5, "cm"))
-  t <- t + theme(legend.key.width=unit(.1, "cm"))
+  t <- t + theme(legend.key.size = unit(0.5, "cm"))
+  t <- t + theme(legend.key.width = unit(.1, "cm"))
   t
 }
 

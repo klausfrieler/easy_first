@@ -216,13 +216,14 @@ prepare_simul_data <-function(){
            prob_p = freq_p/total, 
            surprise_p = -log2(prob_p))  %>% 
     ungroup()
-  wjd_simul <- calc_overall_complexity(wjd_simul, measures = c("int_variety", "pitch_variety", "dir_change", "mean_run_length"))
+  wjd_simul <- calc_overall_complexity(wjd_simul, 
+                                       measures = c("int_variety", "pitch_variety", "dir_change", "mean_run_length"))
   wjd_simul <- 
     wjd_simul %>% 
     mutate(start_id = sprintf("%d_%d", as.integer(factor(melid)), start)) %>% 
     left_join(phrase_pos %>% 
                 select(rev_phrase_pos, rel_phrase_pos, start_id, phrase_len), by = "start_id") %>% 
-    mutate(in_phrase = (rev_phrase_pos - N) >= 0 ) 
+    mutate(in_phrase = (rev_phrase_pos - N) > 0 ) 
   
   saveRDS(wjd_simul, "data/wjd_simul.RDS")
   wjd_simul  
@@ -247,7 +248,7 @@ prepare_data <- function(full = F){
     ungroup() %>% 
     left_join(phrase_pos %>% 
                 select(phrase_pos, rev_phrase_pos, rel_phrase_pos, start_id, phrase_len), by = "start_id") %>% 
-    mutate(in_phrase = (rev_phrase_pos - N) >= 0 ) %>% 
+    mutate(in_phrase = (rev_phrase_pos - N) > 0 ) %>% 
     left_join(phrase_pos %>% freq_table(phrase_pos) %>% select(phrase_pos, pos_weight = freq), by = "phrase_pos") 
   #wjd_all <- wjd_all %>% group_by(N, value) %>%   mutate(freq = n()) %>% ungroup() %>% group_by(N) %>% mutate(total = sum(freq), prob = freq/total, surprise = -log2(prob))  %>% ungroup() %>% select(-total)
   #wjd_all <- wjd_all %>% group_by(N, id, value) %>%   mutate(freq_s = n()) %>% ungroup() %>% group_by(N, id) %>% mutate(total = sum(freq_s), prob_s = freq_s/total, surprise_s = -log2(prob_s))  %>% ungroup() %>% select(-total)
@@ -328,13 +329,13 @@ calc_overall_complexity <- function(data = wjd_all, measures = easiness_measures
       #printf("%s %d", m, sum(is.na(data$easiness)))
       #print(table(data[is.na(data$easiness),]$N ))
       #browser()
-      data[is.na(data$easiness),]$easiness <- 0
+      data[as.vector(is.na(data$easiness)),]$easiness <- 0
     }
     if(any(!is.finite(data$easiness))){
       #printf("%s: %d", m, sum(!is.finite(data$easiness)))
       #print(table(data[!is.finite(data$easiness),]$N ))
       #browser()
-      data[!is.finite(data$easiness),]$easiness <- 0
+      data[as.vector(!is.finite(data$easiness)),]$easiness <- 0
     }
     data[, sprintf("z_%s", m)] <- data$easiness
   }
@@ -345,6 +346,16 @@ calc_overall_complexity <- function(data = wjd_all, measures = easiness_measures
   data <- data %>% group_by(N) %>% mutate(combined_easiness = scale(combined_easiness)) %>% ungroup()
   #tmp <- data %>% group_by(N) %>% summarise(cor(ce, combined_easiness))
   data
+}
+
+filter_in_phrase_ngrams <- function(data){
+  data <- data %>% mutate(in_phrase = (rev_phrase_pos - N) > 0)
+  data <- data %>% filter(in_phrase, !(sub_type %in% c("trill", "repetition"))) %>% group_by(N) %>% mutate(total_freq = n()) %>% ungroup() 
+  
+  data <- data %>% group_by(value) %>% mutate(freq = n(), surprise = -log2(freq/total_freq)) %>% ungroup()
+  data <- data %>% group_by(N) %>% mutate(z_surprise = scale(surprise)) %>% ungroup()
+  data <- calc_overall_complexity(data, measures = c("int_variety", "pitch_variety", "dir_change", "mean_run_length"))
+  data  
 }
 
 plot_easiness_by_phrase_pos <- function(data = wjd_all, 
@@ -359,19 +370,92 @@ plot_easiness_by_phrase_pos <- function(data = wjd_all,
                                         smooth = "poly", poly_degree = 3){
   #data$easiness <- data %>% pull(!!rlang::enquo(easiness))
   data$easiness <- as.data.frame(data)[, easiness]
-
   if(standardize){
     data <- data %>% group_by(N) %>% mutate(easiness = scale(easiness)) %>% ungroup()
   }  
   #browser()
   data <- 
     data %>% 
-    filter(N >= min_N, in_phrase, freq >= min_freq, phrase_pos <= max_pos) %>%  
+    filter(N >= min_N, in_phrase, freq >= min_freq, phrase_pos <= max_pos, phrase_len >= N) %>%  
     group_by(N, phrase_pos) %>% 
     summarise(easiness_mean = mean(easiness), 
               easiness_sd = sd(easiness), 
               n = n(), 
-              easiness_se = easiness_sd/sqrt(n())) 
+              easiness_se = easiness_sd/sqrt(n())) %>% 
+    ungroup() 
+  mean_eff_size <- 
+    data %>% 
+    group_by(N) %>% 
+    summarise(r = diff(range(easiness_mean)), mem = mean(easiness_mean)) %>% 
+    print() %>% 
+    summarise(d = mean(r), max_d = max(r), min_d = min(r), med_d = median(r), mem = mean(mem)) %>% 
+    print() %>% 
+    pull(med_d)
+  #browser()
+  cor <- my_cor_test(data %>% filter(N == 4), "phrase_pos", "easiness_mean") 
+  mean_cor <- 
+    map_dfr(3:10, function(x) {
+      my_cor_test(data %>% filter(N == x), "phrase_pos", "easiness_mean")}) %>% 
+    summarise(mean_cor = mean(estimate)) %>% 
+    print()
+  
+  printf("Data points: %d, mean eff. size: %f", sum(data$n), mean_eff_size)
+  
+  q <- 
+    data %>% 
+    ggplot(aes(x = phrase_pos, y = easiness_mean, color = factor(N))) 
+  q <- q + geom_errorbar(aes(ymin = easiness_mean - easiness_se, ymax = easiness_mean + easiness_se)) 
+  if(facetting){
+    if(fix_scale){
+      q <- q + facet_wrap(~N) 
+    }
+    else{
+      q <- q + facet_wrap(~N, scales = "free_y") 
+    }
+    q <- q + theme(legend.position = "none") 
+  }
+  if(smooth == "poly"){
+    f <- sprintf("y ~ poly(x, %d)", poly_degree)
+    q <- q + geom_smooth(method = "lm", formula = f) 
+  }
+  else{
+    q <- q + geom_smooth() 
+    
+  }
+  q <- q + theme_bw() 
+  q <- q + labs(x = "Phrase position", y  = easiness_label, caption  = sprintf("N = %d", sum(data$n))) 
+  q <- q + geom_point()
+  q
+}
+
+plot_easiness_by_rev_phrase_pos <- function(data = wjd_all, 
+                                        min_N = 3, 
+                                        min_freq = 1, 
+                                        max_pos = 50, 
+                                        fix_scale = FALSE,
+                                        standardize = FALSE,
+                                        facetting = TRUE,
+                                        easiness = "surprise",
+                                        easiness_label = "Mean Surprise",
+                                        smooth = "poly", poly_degree = 3){
+  #data$easiness <- data %>% pull(!!rlang::enquo(easiness))
+  data$easiness <- as.data.frame(data)[, easiness]
+  data$phrase_pos <- data$rev_phrase_pos
+  if(standardize){
+    data <- data %>% group_by(N) %>% mutate(easiness = scale(easiness)) %>% ungroup()
+  }  
+  #browser()
+  data <- 
+    data %>% 
+    filter(N >= min_N, in_phrase, freq >= min_freq, phrase_pos <= max_pos, phrase_pos >= N) %>%  
+    group_by(N, phrase_pos) %>% 
+    summarise(easiness_mean = mean(easiness), 
+              easiness_sd = sd(easiness), 
+              n = n(), 
+              easiness_se = easiness_sd/sqrt(n())) %>% 
+    ungroup() %>% 
+    mutate(phrase_pos =  - phrase_pos)
+  
   mean_eff_size <- 
     data %>% 
     group_by(N) %>% 
@@ -480,13 +564,77 @@ plot_easiness_by_type <- function(data = wjd_comb,
                                    min_freq = 1, 
                                    max_pos = 30, 
                                    standardize = FALSE,
-                                   easiness = "surprise",
+                                   easiness = "combined_easiness",
                                    smooth = "poly", 
-                                   poly_degree = 3){
+                                   poly_degree = 3,
+                                   plot_type = "errorbars"){
   #data$group_var <- data %>% pull(!!rlang::enquo(group_var))
   #data$easiness <- data %>% pull(!!rlang::enquo(easiness))
   data$easiness <- as.data.frame(data)[, easiness]
   easiness_label <- get_easiness_label(easiness)
+  
+  if(standardize){
+    data <- data %>% group_by(N) %>% mutate(easiness = scale(easiness)) %>% ungroup()
+    
+  }
+  data <- 
+    data %>% 
+    filter(N >= min_N, freq >= min_freq, phrase_pos <= max_pos) %>%  
+    group_by(type, phrase_pos, N) %>% 
+    summarise(sp = mean(easiness), 
+              sp_sd = sd(easiness), 
+              n = n(), 
+              se = sp_sd/sqrt(n())) %>% 
+    ungroup()
+  data$type <- (factor(data$type, labels = c("Simulated", "WJD")) )
+  if(plot_type == "ribbon"){
+    data$data_type <- data$type
+    data <- data %>% mutate(type = sprintf("%s", type))
+  }
+  q <- 
+    data %>% 
+    ggplot(aes(x = phrase_pos, y = sp)) 
+  if(plot_type == "errorbars"){
+    q <- q + geom_errorbar(aes(ymin = sp - se, ymax = sp + se, color = type, shape = type)) 
+    q <- q + geom_point()
+    
+  } 
+  else{
+    q <- q + geom_ribbon(aes(ymin = sp - se, ymax = sp + se, fill = type, group = type), alpha = .5)
+    q <- q + geom_line(aes(group = type), size = .5, color = "black")
+  }
+  q <- q + facet_wrap(~N) 
+  
+  if(smooth == "poly"){
+    f <- sprintf("y ~ poly(x, %d)", poly_degree)
+    q <- q + geom_smooth(aes(group = type), method = "lm", formula = f, colour = "black", se = F) 
+  }
+  else if (smooth == "standard"){
+    q <- q + geom_smooth(aes(group = type)) 
+    
+  }
+
+  q <- q + get_default_theme()
+  q <- q + theme(legend.position = c(.85, .2), legend.background = element_rect(colour = "black")) 
+  
+  #q <- q + labs(x = "Phrase position", y  = easiness_label, caption  = sprintf("N = %d", sum(data$n))) 
+  q <- q + labs(x = "Phrase position", y  = easiness_label) 
+  q
+}
+
+plot_easiness_by_type_reversed <- function(data = wjd_comb, 
+                                  min_N = 3, 
+                                  min_freq = 1, 
+                                  max_pos = 30, 
+                                  standardize = FALSE,
+                                  easiness = "surprise",
+                                  smooth = "poly", 
+                                  poly_degree = 3){
+  #data$group_var <- data %>% pull(!!rlang::enquo(group_var))
+  #data$easiness <- data %>% pull(!!rlang::enquo(easiness))
+  data$easiness <- as.data.frame(data)[, easiness]
+  easiness_label <- get_easiness_label(easiness)
+  data$phrase_pos <- data$rev_phrase_pos
   #browser()
   if(standardize){
     data <- data %>% group_by(N) %>% mutate(easiness = scale(easiness)) %>% ungroup()
@@ -494,13 +642,17 @@ plot_easiness_by_type <- function(data = wjd_comb,
   }
   data <- 
     data %>% 
-    filter(N >= min_N, in_phrase, freq >= min_freq, phrase_pos <= max_pos) %>%  
+    filter(N >= min_N, in_phrase, freq >= min_freq, phrase_pos <= max_pos, phrase_pos >= N) %>%  
     group_by(type, phrase_pos, N) %>% 
     summarise(sp = mean(easiness), 
               sp_sd = sd(easiness), 
               n = n(), 
-              se = sp_sd/sqrt(n())) 
-  data$type <- (factor(data$type, labels = c("Simulated", "WJD")) )
+              se = sp_sd/sqrt(n())) %>% 
+    ungroup() %>% 
+    mutate(phrase_pos = -phrase_pos)
+  
+  
+  data$type <- (factor(data$type, labels = c("Simulated", "WJD")))
   q <- 
     data %>% 
     ggplot(aes(x = phrase_pos, y = sp, color = type, shape = type)) 
@@ -518,8 +670,123 @@ plot_easiness_by_type <- function(data = wjd_comb,
   q <- q + theme(legend.position = c(.85, .2), legend.background = element_rect(colour = "black")) 
   
   #q <- q + labs(x = "Phrase position", y  = easiness_label, caption  = sprintf("N = %d", sum(data$n))) 
-  q <- q + labs(x = "Phrase position", y  = easiness_label) 
+  q <- q + labs(x = "Reversed phrase position ", y  = easiness_label) 
   q <- q + geom_point()
+  q
+}
+
+plot_easiness_by_type_MLA <- function(data = wjd_inphrase_comb, 
+                                      min_N = 3, 
+                                      min_freq = 1, 
+                                      max_pos = 30, 
+                                      standardize = FALSE,
+                                      easiness = "z_surprise",
+                                      MLA_main_types = c("line", "lick"),
+                                      smooth = "poly", 
+                                      poly_degree = 1){
+  #data$group_var <- data %>% pull(!!rlang::enquo(group_var))
+  #data$easiness <- data %>% pull(!!rlang::enquo(easiness))
+  data$easiness <- as.data.frame(data)[, easiness]
+  easiness_label <- get_easiness_label(easiness)
+  #browser()
+  if(standardize){
+    data <- data %>% filter(in_phrase) %>% group_by(N) %>% mutate(easiness = scale(easiness)) %>% ungroup()
+    
+  }
+  data <- 
+    data %>% 
+    filter(N >= min_N, freq >= min_freq, phrase_pos <= max_pos, MLA_main_type %in% MLA_main_types) %>%  
+    group_by(type, phrase_pos, N, MLA_main_type) %>% 
+    summarise(sp = mean(easiness), 
+              sp_sd = sd(easiness), 
+              n = n(), 
+              se = sp_sd/sqrt(n())) 
+  data$type <- as.character(factor(data$type, labels = c("Simulated", "WJD")) )
+  data$data_type <- data$type
+  data <- data %>% mutate(type = sprintf("%s-%s", type, MLA_main_type))
+  q <- 
+    data %>% 
+    ggplot(aes(x = phrase_pos, y = sp)) 
+  #q <- q + geom_errorbar(aes(ymin = sp - se, ymax = sp + se)) 
+  q <- q + geom_ribbon(aes(ymin = sp - se, ymax = sp + se, fill = data_type, group = type), alpha = .5)
+  q <- q + geom_line(aes(linetype = MLA_main_type, group = type), size = 1, color = "black")
+  q <- q + facet_wrap(~N) 
+  #if(smooth == "poly"){
+  #  f <- sprintf("y ~ poly(x, %d)", poly_degree)
+  #  q <- q + geom_smooth(method = "lm", formula = f, aes(group = type), colour = "black", se = F) 
+  #}
+  #else{
+  #  q <- q + geom_smooth(se = F, aes(group = type)) 
+  #  
+  #}
+  
+  q <- q + get_default_theme(keep_legend = T)
+  q <- q + theme(legend.key.size = unit(0.5, "cm"))
+  q <- q + theme(legend.key.width = unit(1.0, "cm"))
+  q <- q + theme(legend.position = c(.85, .1), legend.background = element_rect(colour = "black")) 
+  
+  #q <- q + labs(x = "Phrase position", y  = easiness_label, caption  = sprintf("N = %d", sum(data$n))) 
+  q <- q + labs(x = "Phrase position", y  = easiness_label) 
+  #q <- q + geom_point()
+  q
+}
+plot_easiness_by_type_MLA_rev <- function(data = wjd_inphrase_comb, 
+                                      min_N = 3, 
+                                      min_freq = 1, 
+                                      max_pos = 30, 
+                                      standardize = FALSE,
+                                      easiness = "z_surprise",
+                                      MLA_main_types = c("line", "lick"),
+                                      smooth = "poly", 
+                                      poly_degree = 3){
+  #data$group_var <- data %>% pull(!!rlang::enquo(group_var))
+  #data$easiness <- data %>% pull(!!rlang::enquo(easiness))
+  data$easiness <- as.data.frame(data)[, easiness]
+  easiness_label <- get_easiness_label(easiness)
+  data$phrase_pos <- data$rev_phrase_pos
+  #browser()
+  if(standardize){
+    data <- data %>% filter(in_phrase) %>% group_by(N) %>% mutate(easiness = scale(easiness)) %>% ungroup()
+    
+  }
+  data <- 
+    data %>% 
+    filter(N >= min_N, freq >= min_freq, phrase_pos <= max_pos, phrase_pos >= N, MLA_main_type %in% MLA_main_types) %>%  
+    group_by(type, phrase_pos, N, MLA_main_type) %>% 
+    summarise(sp = mean(easiness), 
+              sp_sd = sd(easiness), 
+              n = n(), 
+              se = sp_sd/sqrt(n())) %>% 
+    ungroup() %>%
+    mutate(phrase_pos = -phrase_pos)
+    
+  data$type <- as.character(factor(data$type, labels = c("Simulated", "WJD")) )
+  data$data_type <- data$type
+  data <- data %>% mutate(type = sprintf("%s-%s", type, MLA_main_type))
+  q <- 
+    data %>% 
+    ggplot(aes(x = phrase_pos, y = sp)) 
+  #q <- q + geom_errorbar(aes(ymin = sp - se, ymax = sp + se)) 
+  q <- q + geom_ribbon(aes(ymin = sp - se, ymax = sp + se, fill = data_type, group = type))
+  q <- q + geom_line(aes(linetype = MLA_main_type, group = type), size = 1, color = "black")
+  q <- q + facet_wrap(~N) 
+  if(smooth == "poly"){
+    f <- sprintf("y ~ poly(x, %d)", poly_degree)
+    q <- q + geom_smooth(method = "lm", formula = f, aes(group = type), colour = "black", se = F) 
+  }
+  else{
+    q <- q + geom_smooth(se = F, aes(group = type)) 
+    
+  }
+  q <- q + get_default_theme(keep_legend = T)
+  q <- q + theme(legend.key.size = unit(0.5, "cm"))
+  q <- q + theme(legend.key.width = unit(1.0, "cm"))
+  
+  q <- q + theme(legend.position = c(.85, .1), legend.background = element_rect(colour = "black")) 
+  
+  #q <- q + labs(x = "Phrase position", y  = easiness_label, caption  = sprintf("N = %d", sum(data$n))) 
+  q <- q + labs(x = "Phrase position", y  = easiness_label) 
+  #q <- q + geom_point()
   q
 }
 my_cor_test <- function(data, x, y, method = "pearson", remove_outliers = F){
@@ -643,7 +910,43 @@ get_regressions <- function(data = wjd_all,
   max_N <- max(data$N, na.rm = T)
   map_dfr(min_N:max_N, function(k){
     model <- lm(formula = f, data = data %>% filter(N == k, phrase_pos <= max_pos)) %>% broom::glance() %>% mutate(N = k)  
+    #model <- lm(formula = f, data = data %>% filter(N == k, phrase_pos <= max_pos)) %>% broom::tidy() %>% mutate(N = k)  
   }) %>% select(N, 2:length(.))
+}
+
+get_linear_betas <- function(data = wjd_inphrase, 
+                            MLA_main_type = c("lick", "line"),
+                            min_N = 3, 
+                            max_pos_range = 15:30, 
+                            easiness = "combined_easiness", 
+                            aggregate = TRUE){
+  #browser()
+  data$easiness <- as.data.frame(data)[, easiness]
+  data <- data %>% filter(N >= min_N, phrase_pos <= max(max_pos_range))
+  if(aggregate){
+    if(any(is.infinite(data$easiness))) {
+      data[is.infinite(data$easiness),]$easiness <- NA
+    }
+    data <- data %>% group_by(N, phrase_pos, MLA_main_type) %>% summarise(easiness = mean(easiness, na.rm = T)) %>% ungroup()
+    
+  }
+  messagef("Running linear regression for %s (min N = %d, min_ax_pos = %d, max_max_pos = %d, aggregated = %s)", easiness, min_N, min(max_pos_range), max(max_pos_range), aggregate)
+  f <- as.formula(sprintf("easiness ~ phrase_pos"))
+  #browser()
+  max_N <- max(data$N, na.rm = T)
+  map_dfr(MLA_main_type, function(mla){
+    map_dfr(max_pos_range, function(mp){
+      map_dfr(min_N:max_N, function(k){
+        #browser()
+        model <- lm(formula = f, data = data %>% filter(N == k, phrase_pos <= mp, MLA_main_type == mla)) %>% 
+          broom::tidy() %>% 
+          mutate(N = k, max_pos = mp, MLA_main_type = mla) %>% 
+          filter(term != "(Intercept)") %>% 
+          select(-term)
+        model
+      })
+    })
+  })  %>% select(MLA_main_type, max_pos, N, everything()) %>% arrange(MLA_main_type, max_pos, N)
 }
 
 get_regressions_with_group <- function(data = wjd_all, min_N = 3, max_pos = 30, easiness = "surprise", group_var = "style", aggregate = TRUE, degree = 1){
@@ -806,7 +1109,7 @@ single_phrase_plot2 <- function(data = wjd_all, phrase_id, easiness = "surprise"
 }
 get_all_correlations <- function(data = wjd_all, 
                                  phrase_N = 5, 
-                                 easiness_measures = c("combined_easiness", "surprise", "mean_int_size"),
+                                 easiness_measures = c("combined_easiness", "z_surprise"),
                                  method = "pearson", 
                                  max_pos = 15, 
                                  size = 1000,
@@ -830,14 +1133,14 @@ get_all_correlations <- function(data = wjd_all,
     cors <- 
       map_dfr(easiness_measures, function(y){
         #browser()
-        fit <- my_cor_test(data = d, x = "phrase_pos", y = y, method = method, remove_outliers = F) 
-        fit$alternative <- NULL
-        fit$statistic  <- NULL
-        fit$conf.low  <- NULL
-        fit$conf.high  <- NULL
-        fit$easiness <- y
-        fit$x <- NULL
-        fit$y <- NULL
+        fit <- my_cor_test(data = d, x = "phrase_pos", y = y, method = method, remove_outliers = F) %>% 
+          select(estimate, p.value, method, easiness = y)
+        #f <- as.formula(sprintf("%s ~ phrase_pos", y))
+        #fit <- lm(formula = f, data = d) %>% 
+        #  broom::tidy() %>% 
+        #  mutate(N = phrase_N, max_pos = max_pos, easiness = y) %>% 
+        #  filter(term != "(Intercept)") %>% 
+        #  select(-term)
         fit
       })
 
@@ -1231,12 +1534,12 @@ global_correlation_analysis <- function(data,
 }
 
 make_combined_df <- function(){
-  tmp1 <- wjd_all %>% 
-    select(id, start, N, value, phrase_pos, combined_easiness, surprise, z_surprise, in_phrase, freq) %>% 
+  tmp1 <- wjd_tmp %>% 
+    #select(id, start, N, value, phrase_pos, rev_phrase_pos, combined_easiness, surprise, z_surprise, in_phrase, freq, g_phrase_id) %>% 
     mutate(type = "wjd") 
     
-  tmp2 <- wjd_simul %>% 
-    select(id, start, N, value, phrase_pos, combined_easiness, surprise, z_surprise, in_phrase, freq) %>% 
+  tmp2 <- wjd_simul2 %>% 
+    #select(id, start, N, value, phrase_pos, rev_phrase_pos, combined_easiness, surprise, z_surprise, in_phrase, freq, g_phrase_id) %>% 
     mutate(type = "simul") 
   bind_rows(tmp1, tmp2)
 }
@@ -1282,4 +1585,105 @@ get_event_densities_range_for_solos <- function(data, window_range = c(1, 3, 5, 
      mutate(id = i) %>% 
      select(id, everything())
  })
+}
+get_mean_phrase_pos <- function(data, group  = "type", min_N = 3, min_freq = 100, max_pos = 30){
+  data <- data %>% filter(N >= min_N, freq >= min_freq, phrase_pos <= max_pos, in_phrase)
+  values <- unique(data$value)
+  data %>% 
+    group_by(value, !!sym(group), N) %>% 
+    summarise(m_pos = mean(phrase_pos), med_pos = median(phrase_pos), difficulty = mean(z_surprise)) %>% 
+    ungroup() %>% 
+    arrange(N, value, difficulty, type)
+  
+}
+
+get_distribution_stats <- function(data, min_N = 3, max_N = 10, max_pos = 10, easiness = "combined_easiness"){
+  stats <- data %>% 
+    group_by(N, phrase_pos) %>% 
+    summarise(m = mean(!!sym(easiness)), 
+              med = median(!!sym(easiness)), 
+              skew = moments::skewness(!!sym(easiness)),
+              n = n()) %>% 
+    ungroup() 
+  
+  stats_all <- data %>% 
+    group_by(N) %>% 
+    summarise(m = mean(!!sym(easiness)), 
+              med = median(!!sym(easiness)), 
+              skew = moments::skewness(!!sym(easiness)),
+              n = n()) %>% 
+    mutate(phrase_pos = 0) %>% 
+    ungroup() 
+  bind_rows(stats, stats_all)
+}
+
+plot_distribution <- function(data, min_N = 3, max_N = 10, max_pos = 1000, easiness = "combined_easiness"){
+  data <- data %>% filter(N >= min_N, N <= max_N, phrase_pos <= max_pos)
+  stats <- get_distribution_stats(data)
+  q <- data %>% ggplot(aes(!!sym(easiness), ..density..)) 
+  q <- q + geom_histogram(fill = "white", color = "black") 
+  q <- q + geom_density(fill = "lightblue3", alpha = .5, adjust = 2)
+  #q <- q + facet_grid(phrase_pos ~ N, scales = "free_y" )
+  q <- q + facet_wrap( ~ N, scales = "free" )
+  q <- q + get_default_theme()
+  q <- q + theme(panel.grid.major.x = element_blank())
+  #q <- q + ggthemes::theme_tufte()
+  q <- q + geom_vline(data = stats %>% filter(phrase_pos == 0), aes(xintercept = m), size = 1, color = "black")
+  q <- q + geom_vline(data = stats %>% filter(phrase_pos == 0 ), aes(xintercept = med), size = 1, color = "black", linetype = "dotted")
+  q <- q + labs(x = get_easiness_label(easiness), y = "Density")
+  
+  #s <- stats %>% ggplot(aes(x = factor(phrase_pos), y = med))
+  #s <- s + geom_point()
+  #s <- s + facet_wrap(~N)
+  #s <- s + get_default_theme()
+  q
+}
+
+get_longest_pattern <- function(data, min_N = 3, max_pos = 30){
+  data <- data %>% 
+    filter(in_phrase, N >= 3, phrase_pos <= 30, freq > 1) %>% 
+    mutate(pos_id = sprintf("%s_%s", g_phrase_id, phrase_pos))
+  #browser()
+  tmp <- data %>% group_by(pos_id) %>% mutate(best  = (N == max(N)))  %>% ungroup()
+  tmp <- tmp %>% filter(best) %>% select(-best)
+  return(tmp)
+  pos_ids <- unique(data$pos_id)
+  map_dfr(pos_ids, function(pi){
+    
+    tmp <- data %>% filter(pos_id == pi, freq > 1) 
+    ret <- NULL
+    browser()
+    if(nrow(tmp)){
+      ret <- tmp %>% filter(N == max(N)) %>% select(g_phrase_id, phrase_pos, N, freq, z_surprise, combined_easiness)
+    }
+    ret
+  })
+}
+add_mla_annotations <- function(data, mla_filename = "c:/MeloSpyGUI/analysis/feature+viz/wjd_mla.csv"){
+
+  wjd_mla <- read.csv(mla_filename, sep = ";", stringsAsFactors = F) %>% 
+    as_tibble() %>% 
+    mutate(melid = as.integer(factor(id)),
+           g_phrase_id = sprintf("%s_%s", melid, phrase_id_raw)) %>% 
+    group_by(g_phrase_id) %>% 
+    mutate(phrase_pos = 1:n()) %>% 
+    ungroup() %>% 
+    filter(melid != 194) 
+  
+  mlas <- wjd_mla %>% 
+    filter(!is.na(MLA_main_type))
+  
+  expanded_MLAs <- 
+    map2_dfr(mlas$MLA_main_type, mlas$MLA_length, function(x, y){
+      if(y > 0)
+        tibble(MLA_main_type = rep(x, y), MLA_length = y)
+    })
+  #browser()
+  ret <- wjd_mla %>% 
+    select(melid, g_phrase_id, phrase_pos) %>% 
+    bind_cols(expanded_MLAs) %>% 
+    group_by(melid, g_phrase_id, MLA_main_type) %>% 
+    mutate(MLA_pos = 1:n()) %>% 
+    ungroup()
+  data %>% left_join(ret, by = c("melid", "g_phrase_id", "phrase_pos"))
 }
