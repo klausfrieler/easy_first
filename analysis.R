@@ -911,7 +911,7 @@ get_regressions <- function(data = wjd_all,
     if(any(is.infinite(data$easiness))) {
       data[is.infinite(data$easiness),]$easiness <- NA
     }
-    data <- data %>% group_by(N, phrase_pos) %>% summarise(easiness = mean(easiness, na.rm = T)) %>% ungroup()
+    data <- data %>% group_by(N, phrase_pos) %>% summarise(easiness = mean(easiness, na.rm = T), .groups = "drop")
     
   }
   messagef("Running regressions for %s with degree %d (min N = %d, max_pos = %d, aggregated = %s)", easiness, degree, min_N, max_pos, aggregate)
@@ -937,7 +937,7 @@ get_linear_betas <- function(data = wjd_inphrase,
     if(any(is.infinite(data$easiness))) {
       data[is.infinite(data$easiness),]$easiness <- NA
     }
-    data <- data %>% group_by(N, phrase_pos, MLA_main_type) %>% summarise(easiness = mean(easiness, na.rm = T)) %>% ungroup()
+    data <- data %>% group_by(N, phrase_pos, MLA_main_type) %>% summarise(easiness = mean(easiness, na.rm = T), .groups = "drop")
     
   }
   messagef("Running linear regression for %s (min N = %d, min_ax_pos = %d, max_max_pos = %d, aggregated = %s)", easiness, min_N, min(max_pos_range), max(max_pos_range), aggregate)
@@ -971,7 +971,7 @@ get_regressions_with_group <- function(data = wjd_all, min_N = 3, max_pos = 30, 
   data <- data %>% group_by(N) %>% mutate(easiness = scale(easiness)) %>% ungroup()
   #browser()
   if(aggregate){
-    data <- data %>% group_by(group_var, phrase_pos) %>% summarise(easiness = mean(easiness, na.rm = T)) %>% ungroup()
+    data <- data %>% group_by(group_var, phrase_pos) %>% summarise(easiness = mean(easiness, na.rm = T), .groups = "drop") 
   }
   messagef("Running regressions for %s with degree %d (min N = %d, max_pos = %d, aggregated = %s)", easiness, degree, min_N, max_pos, aggregate)
   f <- as.formula(sprintf("easiness ~ poly(phrase_pos, %d) + group_var", degree, group_var))
@@ -1335,9 +1335,9 @@ compare_single_phrase_correlations <- function(data = wjd_all,
   lm_df <- lm(estimate~type + easy_type, data = comb_cor) %>% broom::glance()
   tt_df <- t.test(estimate ~ type, data = comb_cor) %>% broom::glance()
   #browser()
-  stat_05 <- comb_cor %>% group_by(type, easy_type) %>% summarise(mean_estimate = mean(estimate), perc_sig = mean(sig_05), BF = perc_sig/.025) %>% mutate(alpha = ".05", N = phrase_N, size = size) %>% ungroup()
-  stat_01 <- comb_cor %>% group_by(type, easy_type) %>% summarise(mean_estimate = mean(estimate), perc_sig = mean(sig_01), BF = perc_sig/.005) %>% mutate(alpha = ".01", N = phrase_N, size = size) %>% ungroup() 
-  stat_001 <- comb_cor %>%  group_by(type, easy_type) %>% summarise(mean_estimate = mean(estimate), perc_sig = mean(sig_001), BF = perc_sig/.0005) %>% mutate(alpha = ".001", N = phrase_N, size = size) %>% ungroup()
+  stat_05 <- comb_cor %>% group_by(type, easy_type) %>% summarise(mean_estimate = mean(estimate), perc_sig = mean(sig_05), BF = perc_sig/.025) %>% mutate(alpha = ".05", N = phrase_N, size = size, .groups = "drop")
+  stat_01 <- comb_cor %>% group_by(type, easy_type) %>% summarise(mean_estimate = mean(estimate), perc_sig = mean(sig_01), BF = perc_sig/.005) %>% mutate(alpha = ".01", N = phrase_N, size = size, .groups = "drop") 
+  stat_001 <- comb_cor %>%  group_by(type, easy_type) %>% summarise(mean_estimate = mean(estimate), perc_sig = mean(sig_001), BF = perc_sig/.0005) %>% mutate(alpha = ".001", N = phrase_N, size = size, .groups = "drop")
   stats <- bind_rows(stat_05, stat_01, stat_001) %>% mutate(easy_type = as.character(easy_type)) %>% arrange(desc(alpha), easy_type, type)
   list(data = comb_cor, ks = ks_df, lm = lm_df, tt = tt_df, stats = stats)
 }
@@ -1613,15 +1613,14 @@ get_distribution_stats <- function(data, min_N = 3, max_N = 10, max_pos = 10, ea
     summarise(m = mean(!!sym(easiness)), 
               med = median(!!sym(easiness)), 
               skew = moments::skewness(!!sym(easiness)),
-              n = n()) %>% 
-    ungroup() 
+              n = n(), .grous = "drop")
   
   stats_all <- data %>% 
     group_by(N) %>% 
     summarise(m = mean(!!sym(easiness)), 
               med = median(!!sym(easiness)), 
               skew = moments::skewness(!!sym(easiness)),
-              n = n()) %>% 
+              n = n(), .grous = "keep") %>% 
     mutate(phrase_pos = 0) %>% 
     ungroup() 
   bind_rows(stats, stats_all)
